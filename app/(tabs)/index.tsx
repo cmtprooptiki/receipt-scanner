@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   Image,
   SafeAreaView,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -15,56 +16,40 @@ import {
   CameraType,
   useCameraPermissions,
 } from "expo-camera";
+import * as ImagePicker from "expo-image-picker";
 
-const BACKEND_UPLOAD_URL = "http://192.168.0.130:3000/upload-receipt"; // 🔴 change this
+const BACKEND_UPLOAD_URL = "http://192.168.0.153:3000/upload-receipt"; // 🔴 your backend
+
+type FlashMode = "off" | "on" | "auto";
 
 export default function HomeScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView | null>(null);
 
   const [facing, setFacing] = useState<CameraType>("back");
-  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [flash, setFlash] = useState<FlashMode>("off");
 
+  const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
-
-  // Permissions object not loaded yet
-  if (!permission) {
-    return (
-      <SafeAreaView style={styles.centered}>
-        <Text style={styles.loadingText}>Loading camera permissions…</Text>
-      </SafeAreaView>
-    );
-  }
-
-  // Ask for permission
-  if (!permission.granted) {
-    return (
-      <SafeAreaView style={styles.centered}>
-        <Text style={styles.permissionText}>
-          We need your permission to use the camera.
-        </Text>
-        <TouchableOpacity
-          style={styles.primaryButton}
-          onPress={requestPermission}
-        >
-          <Text style={styles.primaryButtonText}>Grant permission</Text>
-        </TouchableOpacity>
-      </SafeAreaView>
-    );
-  }
 
   const handleToggleCamera = () => {
     setFacing((prev) => (prev === "back" ? "front" : "back"));
   };
 
+  const handleToggleFlash = () => {
+    setFlash((current) =>
+      current === "off" ? "on" : current === "on" ? "auto" : "off"
+    );
+  };
+
   const handleTakePicture = async () => {
-    if (!cameraRef.current) return;
+    if (!cameraRef.current || !permission?.granted) return;
 
     try {
       const photo = await cameraRef.current.takePictureAsync();
       if (photo?.uri) {
-        setPhotoUri(photo.uri);
+        setSelectedImages((prev) => [...prev, photo.uri]);
         setUploadStatus(null);
       }
     } catch (error) {
@@ -72,41 +57,83 @@ export default function HomeScreen() {
     }
   };
 
-  const handleRetake = () => {
-    setPhotoUri(null);
+  const handlePickFromFiles = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 1,
+        // ✅ allow multiple selection
+        allowsMultipleSelection: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const uris = result.assets.map((asset) => asset.uri);
+        setSelectedImages((prev) => [...prev, ...uris]);
+        setUploadStatus(null);
+      }
+    } catch (error) {
+      console.warn("Error picking image from files:", error);
+    }
+  };
+
+  const handleRemoveAt = (index: number) => {
+    setSelectedImages((prev) => prev.filter((_, i) => i !== index));
     setUploadStatus(null);
   };
 
-  const handleUpload = async () => {
-    if (!photoUri) return;
+  const handleClearAll = () => {
+    setSelectedImages([]);
+    setUploadStatus(null);
+  };
+
+  const handleUploadAll = async () => {
+    if (selectedImages.length === 0) return;
 
     setIsUploading(true);
     setUploadStatus(null);
 
     try {
-      const filename =
-        photoUri.split("/").pop() ?? `receipt_${Date.now()}.jpg`;
+      let successCount = 0;
 
-      const formData = new FormData();
-      formData.append("file", {
-        uri: photoUri,
-        name: filename,
-        type: "image/jpeg",
-      } as any); // RN file object
+      for (const uri of selectedImages) {
+        const filename = uri.split("/").pop() ?? `receipt_${Date.now()}.jpg`;
 
-      const response = await fetch(BACKEND_UPLOAD_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "multipart/form-data",
-        },
-        body: formData,
-      });
+        const formData = new FormData();
+        formData.append("file", {
+          uri,
+          name: filename,
+          type: "image/jpeg",
+        } as any);
 
-      if (!response.ok) {
-        throw new Error(`Upload failed with status ${response.status}`);
+        const response = await fetch(BACKEND_UPLOAD_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "multipart/form-data",
+          },
+          body: formData,
+        });
+
+        if (!response.ok) {
+          console.warn(
+            `Upload failed for ${filename} with status ${response.status}`
+          );
+          continue;
+        }
+
+        successCount += 1;
       }
 
-      setUploadStatus("✅ Uploaded successfully!");
+      if (successCount === selectedImages.length) {
+        setUploadStatus(`✅ Uploaded ${successCount} image(s) successfully!`);
+        setSelectedImages([]);
+      } else if (successCount === 0) {
+        setUploadStatus("❌ All uploads failed. Check network/backend.");
+      } else {
+        setUploadStatus(
+          `⚠️ Uploaded ${successCount} of ${selectedImages.length} image(s). Some failed.`
+        );
+      }
     } catch (error) {
       console.warn("Upload error:", error);
       setUploadStatus("❌ Upload failed. Check network/backend.");
@@ -123,10 +150,107 @@ export default function HomeScreen() {
         <Text style={styles.headerTitle}>Receipt Scanner</Text>
       </View>
 
-      {/* If we have a photo, show preview */}
-      {photoUri ? (
-        <View style={styles.previewContainer}>
-          <Image source={{ uri: photoUri }} style={styles.previewImage} />
+      {/* Camera area */}
+      <View style={styles.cameraContainer}>
+        {permission?.granted ? (
+          <>
+            <CameraView
+              ref={cameraRef}
+              style={styles.camera}
+              facing={facing}
+              mode="picture"
+              flash={flash}
+            />
+
+            <View style={styles.cameraControls}>
+              <TouchableOpacity
+                style={styles.smallButton}
+                onPress={handleToggleCamera}
+              >
+                <Text style={styles.smallButtonText}>Flip</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.captureButton}
+                onPress={handleTakePicture}
+              >
+                <View style={styles.captureButtonInner} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.smallButton}
+                onPress={handleToggleFlash}
+              >
+                <Text style={styles.smallButtonText}>
+                  {flash === "off"
+                    ? "Flash Off"
+                    : flash === "on"
+                    ? "Flash On"
+                    : "Flash Auto"}
+                </Text>
+              </TouchableOpacity>
+
+              
+
+              {/* <TouchableOpacity
+                style={styles.smallButton}
+                onPress={handlePickFromFiles}
+              >
+                <Text style={styles.smallButtonText}>Files</Text>
+              </TouchableOpacity> */}
+            </View>
+          </>
+        ) : (
+          <View style={styles.cameraPermissionContainer}>
+            <Text style={styles.permissionText}>
+              Camera permission is not granted.{"\n"}
+              You can still upload images from your files.
+            </Text>
+
+            <TouchableOpacity
+              style={styles.primaryButton}
+              onPress={requestPermission}
+            >
+              <Text style={styles.primaryButtonText}>Enable Camera</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+
+      {/* Always-visible Files button */}
+      <View style={styles.filesRow}>
+        <TouchableOpacity
+          style={styles.primaryButton}
+          onPress={handlePickFromFiles}
+        >
+          <Text style={styles.primaryButtonText}>Upload from Files</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Selected images + upload controls */}
+      {selectedImages.length > 0 && (
+        <View style={styles.bottomPanel}>
+          <Text style={styles.selectedInfo}>
+            {selectedImages.length} image
+            {selectedImages.length > 1 ? "s" : ""} selected
+          </Text>
+
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.thumbnailStrip}
+          >
+            {selectedImages.map((uri, index) => (
+              <TouchableOpacity
+                key={`${uri}-${index}`}
+                onLongPress={() => handleRemoveAt(index)}
+                style={styles.thumbnailWrapper}
+              >
+                <Image source={{ uri }} style={styles.thumbnail} />
+                <Text style={styles.thumbnailHint}>Hold to remove</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
 
           {uploadStatus && (
             <Text style={styles.uploadStatus}>{uploadStatus}</Text>
@@ -135,52 +259,25 @@ export default function HomeScreen() {
           <View style={styles.buttonRow}>
             <TouchableOpacity
               style={[styles.secondaryButton, styles.flexButton]}
-              onPress={handleRetake}
+              onPress={handleClearAll}
               disabled={isUploading}
             >
-              <Text style={styles.secondaryButtonText}>Retake</Text>
+              <Text style={styles.secondaryButtonText}>Clear</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={[styles.primaryButton, styles.flexButton]}
-              onPress={handleUpload}
+              onPress={handleUploadAll}
               disabled={isUploading}
             >
               {isUploading ? (
                 <ActivityIndicator />
               ) : (
-                <Text style={styles.primaryButtonText}>Upload</Text>
+                <Text style={styles.primaryButtonText}>
+                  Upload {selectedImages.length}
+                </Text>
               )}
             </TouchableOpacity>
-          </View>
-        </View>
-      ) : (
-        // Otherwise show live camera
-        <View style={styles.cameraContainer}>
-          <CameraView
-            ref={cameraRef}
-            style={styles.camera}
-            facing={facing}
-            mode="picture"
-          />
-
-          <View style={styles.cameraControls}>
-            <TouchableOpacity
-              style={styles.smallButton}
-              onPress={handleToggleCamera}
-            >
-              <Text style={styles.smallButtonText}>Flip</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.captureButton}
-              onPress={handleTakePicture}
-            >
-              <View style={styles.captureButtonInner} />
-            </TouchableOpacity>
-
-            {/* Spacer to keep layout centered */}
-            <View style={styles.smallButtonPlaceholder} />
           </View>
         </View>
       )}
@@ -192,23 +289,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#000",
-  },
-  centered: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#000",
-    paddingHorizontal: 24,
-  },
-  loadingText: {
-    color: "#fff",
-    fontSize: 16,
-  },
-  permissionText: {
-    color: "#fff",
-    fontSize: 16,
-    textAlign: "center",
-    marginBottom: 16,
   },
   header: {
     paddingHorizontal: 16,
@@ -237,20 +317,30 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 40,
+    paddingHorizontal: 24,
+  },
+  cameraPermissionContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+    backgroundColor: "#000",
+  },
+  permissionText: {
+    color: "#fff",
+    fontSize: 16,
+    textAlign: "center",
+    marginBottom: 16,
   },
   smallButton: {
     borderRadius: 24,
     paddingVertical: 8,
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
     backgroundColor: "rgba(0,0,0,0.6)",
   },
   smallButtonText: {
     color: "#fff",
-    fontSize: 14,
-  },
-  smallButtonPlaceholder: {
-    width: 72, // roughly width of smallButton to balance layout
+    fontSize: 12,
   },
   captureButton: {
     width: 80,
@@ -268,22 +358,47 @@ const styles = StyleSheet.create({
     borderRadius: 30,
     backgroundColor: "#fff",
   },
-  previewContainer: {
-    flex: 1,
-    padding: 16,
+  filesRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: "#020617",
+    borderTopWidth: 1,
+    borderTopColor: "#1f2933",
+  },
+  bottomPanel: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#1f2933",
+    backgroundColor: "#020617",
+  },
+  selectedInfo: {
+    color: "#e5e7eb",
+    fontSize: 14,
+    marginBottom: 8,
+  },
+  thumbnailStrip: {
+    maxHeight: 110,
+  },
+  thumbnailWrapper: {
+    marginRight: 8,
     alignItems: "center",
   },
-  previewImage: {
-    width: "100%",
-    aspectRatio: 3 / 4,
-    borderRadius: 16,
-    marginTop: 8,
+  thumbnail: {
+    width: 72,
+    height: 72,
+    borderRadius: 12,
+  },
+  thumbnailHint: {
+    color: "#9ca3af",
+    fontSize: 10,
+    marginTop: 4,
   },
   buttonRow: {
     flexDirection: "row",
-    marginTop: 16,
+    marginTop: 12,
     columnGap: 12,
-  } as any, // RN doesn't have 'columnGap' in old typings, cast to any if TS complains
+  } as any,
   flexButton: {
     flex: 1,
   },
@@ -315,7 +430,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   uploadStatus: {
-    marginTop: 12,
+    marginTop: 8,
     fontSize: 14,
     color: "#e5e7eb",
     textAlign: "center",
