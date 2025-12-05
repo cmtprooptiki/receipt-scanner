@@ -18,7 +18,11 @@ import {
 } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
 
-const BACKEND_UPLOAD_URL = "http://192.168.0.153:3000/upload-receipt"; // 🔴 your backend
+// 👇 import auth hook from your _layout.tsx
+import { useAuth } from "../_layout";
+
+
+const BACKEND_UPLOAD_URL = "http://192.168.0.153:3000/upload-receipt";
 
 type FlashMode = "off" | "on" | "auto";
 
@@ -32,6 +36,17 @@ export default function HomeScreen() {
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
+
+  // 👇 from Microsoft auth (via _layout)
+  const { signOut } = useAuth();
+
+  const { authState } = useAuth();
+
+  console.log(
+    "User from authState:",
+    authState?.givenName,
+    authState?.surname
+  );
 
   const handleToggleCamera = () => {
     setFacing((prev) => (prev === "back" ? "front" : "back"));
@@ -63,8 +78,7 @@ export default function HomeScreen() {
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: false,
         quality: 1,
-        // ✅ allow multiple selection
-        allowsMultipleSelection: true,
+        allowsMultipleSelection: true, // multi-select
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
@@ -146,8 +160,12 @@ export default function HomeScreen() {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />
 
+      {/* Header with title + Sign out */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Receipt Scanner</Text>
+        <TouchableOpacity onPress={signOut}>
+          <Text style={styles.signOutText}>Sign out</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Camera area */}
@@ -189,15 +207,6 @@ export default function HomeScreen() {
                     : "Flash Auto"}
                 </Text>
               </TouchableOpacity>
-
-              
-
-              {/* <TouchableOpacity
-                style={styles.smallButton}
-                onPress={handlePickFromFiles}
-              >
-                <Text style={styles.smallButtonText}>Files</Text>
-              </TouchableOpacity> */}
             </View>
           </>
         ) : (
@@ -255,8 +264,6 @@ export default function HomeScreen() {
             ))}
           </ScrollView>
 
-          
-
           <View style={styles.buttonRow}>
             <TouchableOpacity
               style={[styles.secondaryButton, styles.flexButton]}
@@ -280,7 +287,6 @@ export default function HomeScreen() {
               )}
             </TouchableOpacity>
           </View>
-          
         </View>
       )}
     </SafeAreaView>
@@ -297,12 +303,18 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 8,
     backgroundColor: "#000",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   headerTitle: {
     color: "#fff",
     fontSize: 20,
     fontWeight: "600",
-    textAlign: "center",
+  },
+  signOutText: {
+    color: "#9ca3af",
+    fontSize: 12,
   },
   cameraContainer: {
     flex: 1,
@@ -432,7 +444,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   uploadStatus: {
-    marginTop: 8,
+    marginBottom: 4,
     fontSize: 14,
     color: "#e5e7eb",
     textAlign: "center",
